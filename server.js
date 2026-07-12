@@ -25,6 +25,158 @@ app.get("/api/test", function (req, res) {
 });
 
 //- Helper functions
+
+// Get all customers from "customers" collection
+async function getAllCustomers() {
+  try {
+    // Stores all customers data
+    let customers = [];
+
+    // Get all customer documents
+    const querySnapshot = await db.collection("customers").get();
+
+    // Loop through each customer document
+    querySnapshot.forEach((customerDoc) => {
+      // Current customer
+      const customer = customerDoc.data();
+
+      // Include the customer's document id
+      customer.id = customerDoc.id;
+
+      customers.push(customer);
+    });
+
+    return customers;
+  } catch (error) {
+    console.error("getAllCustomers error:\n", error);
+
+    return {
+      success: false,
+      customers: [],
+      error: error.message,
+    };
+  }
+}
+
+// Get all reservations from "reservations" collection
+async function getAllReservations() {
+  try {
+    // Stores all reservations data
+    let reservations = [];
+
+    // Get all reservation documents
+    const querySnapshot = await db.collection("reservations").get();
+
+    // Loop through each reservation document
+    querySnapshot.forEach((reservationDoc) => {
+      // Current reservation
+      const reservation = reservationDoc.data();
+
+      // Include the reservation's document id
+      reservation.id = reservationDoc.id;
+
+      reservations.push(reservation);
+    });
+
+    return reservations;
+  } catch (error) {
+    console.error("getAllReservations error:\n", error);
+
+    return {
+      success: false,
+      reservations: [],
+      error: error.message,
+    };
+  }
+}
+
+function getCustomerLastVisitDate(customers) {
+  // Get today's date
+  const today = new Date();
+
+  for (const customer of customers) {
+    // Store the customer's most recent past reservation
+    // Start with null because we haven't found one yet
+    let lastVisitDate = null;
+
+    // Loop through all reservation dates (it has time too) for this customer
+    for (const reservation of customer.dates) {
+      // Extract day, month and year from the date string
+      // (Example: 18/06/2026) Extract 18, 6, 2026
+      const [day, month, year] = reservation.date.split("/");
+
+      // Convert the string date into a JavaScript Date object
+      // Month - 1 is needed because JavaScript months start from 0
+      const reservationDate = new Date(year, month - 1, day);
+
+      // Check if this reservation happened before today
+      if (reservationDate < today) {
+        // If we haven't found a past reservation yet,
+        // OR this reservation is more recent than the current lastVisitDate
+        if (lastVisitDate === null || reservationDate > lastVisitDate) {
+          // Save this date as the new last visit date
+          lastVisitDate = reservationDate;
+        }
+      }
+    }
+
+    // Convert the Date object back into a readable format
+    // Example: "01/06/2026"
+    // If no past reservation exists, store an empty string instead
+    if (lastVisitDate === null) {
+      customer.lastVisitDate = "";
+    } else {
+      customer.lastVisitDate = lastVisitDate.toLocaleDateString("en-GB");
+    }
+  }
+
+  return customers;
+}
+
+function getCustomerUpcomingVisitDate(customers) {
+  // Get today's date
+  const today = new Date();
+
+  for (const customer of customers) {
+    // Store the customer's nearest future reservation
+    // Start with null because we haven't found one yet
+    let upcomingVisitDate = null;
+
+    // Loop through all reservation dates for this customer
+    for (const reservation of customer.dates) {
+      // Split the date string "18/06/2026" into:
+      // day = "18", month = "06", year = "2026"
+      const [day, month, year] = reservation.date.split("/");
+
+      // Convert the string date into a JavaScript Date object
+      // Month - 1 is needed because JavaScript months start from 0
+      const reservationDate = new Date(year, month - 1, day);
+
+      // Check if this reservation is today or in the future
+      if (reservationDate >= today) {
+        // If we haven't found a future reservation yet,
+        // OR this reservation is closer than the current upcomingVisitDate
+        if (upcomingVisitDate === null || reservationDate < upcomingVisitDate) {
+          // Save this date as the new upcoming visit date
+          upcomingVisitDate = reservationDate;
+        }
+      }
+    }
+
+    // Convert the Date object back into a readable format
+    // Example: "18/06/2026"
+    // If no future reservation exists, store an empty string instead
+    if (upcomingVisitDate === null) {
+      customer.upcomingVisitDate = "";
+    } else {
+      customer.upcomingVisitDate =
+        upcomingVisitDate.toLocaleDateString("en-GB");
+    }
+  }
+
+  return customers;
+}
+
 // Get all tables that can accomodate this many guests
 function getSuitableTables(arrTables, totalGuests) {
   // 2, 4, 6
@@ -91,6 +243,129 @@ async function getReservations() {
 
   // Return all reservations
   return arrReservations;
+}
+
+// Calculate what time the reservation ends
+function calculateReservationEndTime(startTime, durationMinutes) {
+  // Split hour and minute from time string
+  let [hours, minutes] = startTime.split(":").map(Number);
+
+  // Create a new Date object
+  let date = new Date();
+
+  // Set the reservation start time
+  date.setHours(hours);
+  date.setMinutes(minutes);
+
+  // Add reservation duration
+  date.setMinutes(date.getMinutes() + durationMinutes);
+
+  // Get updated end time
+  let endHours = String(date.getHours()).padStart(2, "0");
+  let endMinutes = String(date.getMinutes()).padStart(2, "0");
+
+  // Return formatted time range
+  return `${endHours}:${endMinutes}`;
+}
+
+// Check if the reservation has finished, ongoing or in the future
+function getReservationStatus(
+  reservationDate,
+  reservationTime,
+  reservationEndTime,
+  parsedToday,
+) {
+  //- Step 1: Compare reservation date with today's date
+  let reservationStatus = compareDates(reservationDate, parsedToday);
+
+  //- Step 2: Compare reservation time with current time if it's happening today
+  // If reservation is happening today
+  if (reservationStatus == "Ongoing") {
+    reservationStatus = compareTimes(reservationTime, reservationEndTime);
+  }
+
+  return reservationStatus;
+}
+
+// Compare two dates
+function compareDates(reservationDate, parsedToday) {
+  //- Parse both dates so they can be compared later
+  // Today's date is already parsed in the global scope
+  // So, just parse reservatioDate
+  let parsedReservationDate = parseDate(reservationDate);
+
+  //- Compare reservation date with today
+  if (parsedToday > parsedReservationDate)
+    return "Success"; // If reservation is in the past
+  else if (parsedToday < parsedReservationDate)
+    return "Booked"; // If reservation is in the future
+  else return "Ongoing"; // If reservation is today
+
+  // IMPORTANT NOTE: You can compare dates like that using >, <, >=, <=
+  // But you cannot compare using ==
+  // It will compare the memory location of both Date objects
+  // To check if both parsed date are equal, add getTime() method
+  // Example: parsedToday.getTime() == parsedReservationDate.getTime()
+}
+
+// Compare two times
+function compareTimes(reservationTime, reservationEndTime) {
+  // Get current date
+  let currentDate = new Date();
+
+  // Extract hours and minutes from currentDate
+  let currentHours = currentDate.getHours();
+  let currentMinutes = currentDate.getMinutes();
+
+  // Extract hours and minutes from reservationTime
+  // Split the string to an array.
+  // Each element (Index 0 is hours, Index 1 is minutes), convert string to number data type
+  let [reservationHours, reservationMinutes] = reservationTime
+    .split(":")
+    .map(Number);
+
+  // Extract hours and minutes from reservationEndTime
+  // Split the string to an array.
+  // Each element (Index 0 is hours, Index 1 is minutes), convert string to number data type
+  let [reservationEndHours, reservationEndMinutes] = reservationEndTime
+    .split(":")
+    .map(Number);
+
+  // Calculate the total minutes for current time
+  // Calculate the total minutes for reservation time
+  // Calculate the total minutes for reservation end time
+  let currentTimeTotalHours = currentHours * 60 + currentMinutes;
+  let reservationTimeTotalHours = reservationHours * 60 + reservationMinutes;
+  let reservationEndTimeTotalHours =
+    reservationEndHours * 60 + reservationEndMinutes;
+
+  // Compare both values. The one with smaller value, is in the past
+
+  // Example 1:
+  // 18:00 = 1080
+  // 2:30 = 150
+
+  // Example 2:
+  // 00:00 = 0
+  // 08:00 = 480
+
+  console.log("Current Time:", currentTimeTotalHours);
+  console.log("Reservation Time:", reservationTimeTotalHours);
+  console.log("Reservation End Time: ", reservationEndTimeTotalHours);
+  console.log(
+    currentTimeTotalHours >= reservationTimeTotalHours &&
+      currentTimeTotalHours <= reservationEndTimeTotalHours,
+  );
+
+  if (
+    currentTimeTotalHours >= reservationTimeTotalHours &&
+    currentTimeTotalHours <= reservationEndTimeTotalHours
+  )
+    // If reservation is happening now
+    return "Ongoing";
+  else if (reservationTimeTotalHours < currentTimeTotalHours)
+    return "Success"; // If reservation's finished
+  else return "Booked"; // If reservation not yet started
 }
 
 // The four functions below work together to find which table is not occupied
@@ -191,14 +466,13 @@ function convertTimeToMinutes(time) {
   return hours * 60 + minutes;
 }
 
-let crm = {};
 async function getAllReservationsWithCustomers() {
   try {
     // Get all reservation documents
     const querySnapshot = await db.collection("reservations").get();
 
     // Store combined reservation + customer data in this array
-    let arrReservations = [];
+    let reservationData = [];
 
     // Loop through each reservation document
     for (const reservationDoc of querySnapshot.docs) {
@@ -218,14 +492,13 @@ async function getAllReservationsWithCustomers() {
       reservation.id = reservationDoc.id;
 
       // Add both reservation and customer into array
-      arrReservations.push({
+      reservationData.push({
         reservation,
         customer,
       });
     }
 
-    console.log(arrReservations);
-    return { success: true, arrReservations };
+    return { success: true, reservationData };
   } catch (error) {
     console.error("getAllReservationsWithCustomers error:\n", error);
 
@@ -281,7 +554,8 @@ async function getAllReservationsWithCustomers() {
 //   }
 // }
 
-function setDates(reservation, customer) {
+// CRMMMMMMM
+function setDates(crm, reservation, customer) {
   // Get today's date and format it
   const today = new Date();
   const day = String(today.getDate());
@@ -352,6 +626,8 @@ function setDates(reservation, customer) {
     crm[customer.name].lastVisitDate = reservation.date;
     // crm.lastVisitDate = reservation.reservationDate;
   }
+
+  return crm;
 }
 
 function parseDate(dateStr) {
@@ -491,7 +767,388 @@ function getReservationDay(reservationDate) {
   return days[date.getDay()];
 }
 
-//- Add new reservation (CREATE)
+function isFutureReservation(date, time) {
+  // date format: DD/MM/YYYY
+
+  const [day, month, year] = date.split("/").map(Number);
+
+  const [hours, minutes] = time.split(":").map(Number);
+
+  const reservationDateTime = new Date(year, month - 1, day, hours, minutes);
+
+  const currentDateTime = new Date();
+
+  return reservationDateTime > currentDateTime;
+}
+
+//- ----------------- ENDPOINTS FOR ARTIFICIAL INTELLIGENCE -----------------
+//- Add reservation from AI chatbot
+app.post("/api/ai/addReservation", async function (req, res) {
+  try {
+    const data = req.body;
+
+    // Step 1: Check required fields
+    if (
+      !data.name ||
+      !data.phoneNumber ||
+      !data.email ||
+      data.totalGuests == null ||
+      !data.date ||
+      !data.time
+    ) {
+      return res.status(400).json({
+        success: false,
+        code: "MISSING_FIELDS",
+        message: "All fields are required",
+      });
+    }
+
+    // Step 2: Convert guest count to number
+    data.totalGuests = Number(data.totalGuests);
+
+    // Step 3: Validate guest count
+    // Guest count must be a whole number
+    if (!Number.isInteger(data.totalGuests)) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_GUEST_COUNT",
+        message: "Guest count must be a whole number",
+      });
+    }
+
+    // Guest number must be between 1 and 6
+    if (
+      Number.isNaN(data.totalGuests) ||
+      data.totalGuests < 1 ||
+      data.totalGuests > 6
+    ) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_GUEST_COUNT",
+        message: "Guest count must be between 1 and 6",
+      });
+    }
+
+    // Step 4: Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailRegex.test(data.email)) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_EMAIL",
+        message: "Invalid email address",
+      });
+    }
+
+    // Step 5: Validate date format (DD/MM/YYYY)
+    const dateRegex = /^\d{2}\/\d{2}\/\d{4}$/;
+
+    if (!dateRegex.test(data.date)) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_DATE_FORMAT",
+        message: "Date must be in DD/MM/YYYY format",
+      });
+    }
+
+    // Step 6: Validate time format (HH:mm)
+    const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+    if (!timeRegex.test(data.time)) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_TIME_FORMAT",
+        message: "Time must be in HH:mm format",
+      });
+    }
+
+    // Step 7: Check if the date actually exists
+    const [day, month, year] = data.date.split("/").map(Number);
+
+    const reservationDate = new Date(year, month - 1, day);
+
+    // Make sure JavaScript didn't auto-correct the date
+    if (
+      reservationDate.getFullYear() !== year ||
+      reservationDate.getMonth() !== month - 1 ||
+      reservationDate.getDate() !== day
+    ) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_DATE",
+        message: "Invalid date",
+      });
+    }
+
+    // Step 8: Combine date and time into one datetime
+    // Extract hours and minutes
+    const [hours, minutes] = data.time.split(":").map(Number);
+
+    // Create reservation date and time
+    const reservationDateTime = new Date(year, month - 1, day, hours, minutes);
+
+    // Step 9: Get current date and time
+    const currentDateTime = new Date();
+
+    // Step 10: Reservation must be in the future
+    if (reservationDateTime <= currentDateTime) {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_RESERVATION_DATETIME",
+        message: "Reservation date and time must be in the future",
+      });
+    }
+
+    // Step 11: Calculate reservation duration
+    let duration = getReservationDuration(data.totalGuests);
+
+    // Step 12: Get all tables
+    let arrTables = await getTables();
+
+    // Step 13: Find tables that can fit the guests
+    let arrSuitableTables = getSuitableTables(arrTables, data.totalGuests);
+
+    // Step 14: Get all reservations
+    let allReservations = await getReservations();
+
+    // Step 15: Find an available table
+    let availableTable = findAvailableTable(
+      arrSuitableTables,
+      allReservations,
+      data.date,
+      data.time,
+      duration,
+    );
+
+    // Step 16: Stop if no table is available
+    if (availableTable == null) {
+      return res.status(409).json({
+        success: false,
+        code: "NO_TABLE_AVAILABLE",
+        message: "No available table for this reservation",
+      });
+    }
+
+    // Step 17: Check if customer already exists
+    const customerQuery = await db
+      .collection("customers")
+      .where("phoneNumber", "==", data.phoneNumber)
+      .get();
+
+    let customerId;
+
+    // Existing customer found
+    if (!customerQuery.empty) {
+      customerId = customerQuery.docs[0].id;
+    }
+
+    // Customer does not exist
+    else {
+      const customerDoc = await db.collection("customers").add({
+        name: data.name,
+        phoneNumber: data.phoneNumber,
+        email: data.email,
+      });
+
+      customerId = customerDoc.id;
+    }
+
+    // Step 18: Create reservation record
+    await db.collection("reservations").add({
+      customerId: customerId,
+      totalGuests: data.totalGuests,
+      date: data.date,
+      time: data.time,
+      duration: duration,
+      tableID: availableTable.id,
+    });
+
+    // Step 19: Return success response
+    return res.status(201).json({
+      success: true,
+      message: "Reservation created successfully",
+      tableID: availableTable.id,
+    });
+  } catch (error) {
+    console.error("AI reservation error:", error);
+
+    return res.status(500).json({
+      success: false,
+      code: "UNKNOWN_ERROR",
+      message: "Internal server error",
+    });
+  }
+});
+
+//- Get all reservations of a customer
+app.post("/api/ai/getCustomerReservations", async function (req, res) {
+  try {
+    const { phoneNumber } = req.body;
+
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        code: "MISSING_PHONE_NUMBER",
+        message: "Phone number is required",
+      });
+    }
+
+    // Step 1: Find customer using phone number
+    const customerQuery = await db
+      .collection("customers")
+      .where("phoneNumber", "==", phoneNumber)
+      .get();
+
+    // Step 2: If customer does not exist
+    // If the customer has never made a reservation before,
+    // simply return an empty reservation list.
+    if (customerQuery.empty) {
+      return res.status(200).json({
+        success: true,
+        reservations: [],
+      });
+    }
+
+    // Step 3: Store customer's document ID
+    const customerId = customerQuery.docs[0].id;
+
+    // Step 4: Find all reservations belonging to this customer in Firebase
+    const reservationQuery = await db
+      .collection("reservations")
+      .where("customerId", "==", customerId)
+      .get();
+
+    // Step 5:
+    // Create an array of objects
+    // Each object stores a reservation
+    // It has reservation ID, customer ID, date, time and totalGuests
+    let reservations = [];
+    reservationQuery.forEach((doc) => {
+      reservations.push({
+        reservationId: doc.id,
+        ...doc.data(),
+      });
+    });
+
+    // Step 6: Check if the reservation is in the future
+    // Filter the reservations. Only store reservations not yet done (future reservations)
+    reservations = reservations.filter((reservation) =>
+      isFutureReservation(reservation.date, reservation.time),
+    );
+
+    // Step 7: Return all future reservations
+    return res.status(200).json({
+      success: true,
+      reservations,
+    });
+  } catch (error) {
+    console.error("Get customer reservations error:", error);
+
+    return res.status(500).json({
+      success: false,
+      code: "UNKNOWN_ERROR",
+      message: "Internal server error",
+    });
+  }
+});
+
+//- Cancel a reservation
+app.post("/api/ai/cancelReservation", async function (req, res) {
+  try {
+    const { reservationId } = req.body;
+
+    // Step 1: Check if reservation ID is provided
+    if (!reservationId) {
+      return res.status(400).json({
+        success: false,
+        code: "MISSING_RESERVATION_ID",
+        message: "Reservation ID is required",
+      });
+    }
+
+    // Step 2: Find reservation document
+    const reservationDoc = await db
+      .collection("reservations")
+      .doc(reservationId)
+      .get();
+
+    // Step 3: Check if reservation exists
+    if (!reservationDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        code: "RESERVATION_NOT_FOUND",
+        message: "Reservation not found",
+      });
+    }
+
+    // Step 4: Delete reservation
+    await db.collection("reservations").doc(reservationId).delete();
+
+    // Step 5: Return success response
+    return res.status(200).json({
+      success: true,
+      message: "Reservation cancelled successfully",
+    });
+  } catch (error) {
+    console.error("Cancel reservation error:", error);
+
+    return res.status(500).json({
+      success: false,
+      code: "UNKNOWN_ERROR",
+      message: "Internal server error",
+    });
+  }
+});
+
+//- Get a customer
+app.post("/api/ai/getCustomer", async function (req, res) {
+  try {
+    const { phoneNumber } = req.body;
+
+    // Make sure phone number is sent
+    if (!phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        code: "MISSING_PHONE_NUMBER",
+        message: "Phone number is required",
+      });
+    }
+
+    // Find customer via phone number
+    const customerQuery = await db
+      .collection("customers")
+      .where("phoneNumber", "==", phoneNumber)
+      .get();
+
+    // If customer not found in the customers collection
+    if (customerQuery.empty) {
+      return res.status(404).json({
+        success: false,
+        code: "CUSTOMER_NOT_FOUND",
+        message: "Customer not found",
+      });
+    }
+
+    // Customer found
+    const customer = customerQuery.docs[0].data();
+
+    return res.status(200).json({
+      success: true,
+      customer,
+    });
+  } catch (error) {
+    console.error("Get customer error:", error);
+
+    return res.status(500).json({
+      success: false,
+      code: "UNKNOWN_ERROR",
+      message: "Internal server error",
+    });
+  }
+});
+
+//- ----------------- ENDPOINTS FOR ADMIN WEBSITE -----------------
+//- Add new reservation from Admin website >>>>
 app.post("/api/addReservation/:customerID", async function (req, res) {
   // Note:
   // In the frontend:
@@ -503,10 +1160,6 @@ app.post("/api/addReservation/:customerID", async function (req, res) {
     // data is the new reservation details entered by the admin
     // name, phone number, email, total guests, date and time
     const data = req.body;
-    console.log(data);
-
-    console.log("customerID:", req.params.customerID);
-    console.log("type:", typeof req.params.customerID);
 
     //- Step 1: Calculate the duration of reservation time based on total guests
     let duration = getReservationDuration(data.totalGuests);
@@ -514,18 +1167,12 @@ app.post("/api/addReservation/:customerID", async function (req, res) {
 
     //- Step 2: Get all tables in "tables" collection from firebase
     let arrTables = await getTables();
-    console.log("All Tables", arrTables);
 
     //- Step 3: Get all tables that can accomodate this many guests
     let arrSuitableTables = getSuitableTables(arrTables, data.totalGuests);
-    console.log(
-      "All tables that can accomodate this many guests",
-      arrSuitableTables,
-    );
 
     //- Step 4: Get all reservations in "reservations" collection from firebase
     let allReservations = await getReservations();
-    console.log("All Reservations:", allReservations);
 
     //- Step 5: Find which table is not occupied
     let availableTable = findAvailableTable(
@@ -548,6 +1195,7 @@ app.post("/api/addReservation/:customerID", async function (req, res) {
     // In other words,
     // store the result in customerDoc so we can access the new customer document ID
     // If a record of this customer already exist, then only store reservation data
+
     if (req.params.customerID != "null") {
       console.log("HEREEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE");
       //- Step 7: Store reservation details to "reservation" collection
@@ -563,7 +1211,6 @@ app.post("/api/addReservation/:customerID", async function (req, res) {
     // Only add a new document to the customers collection if this customer does not already exist.
     // Each customer document should be unique, so duplicate customer records are not allowed.
     else {
-      console.log("YOOOOOOOOOOOOOOOOOOOOOOOOOOOOO");
       const customerDoc = await db.collection("customers").add({
         name: data.name,
         phoneNumber: data.phoneNumber,
@@ -616,7 +1263,106 @@ app.post("/api/addReservation/:customerID", async function (req, res) {
   //   });
 });
 
-//- Get all tables from "tables" collection (READ)
+//- Get all reservations including their respective customer data (READ)
+// app.get("/api/get-all-reservations-with-customers", async function (req, res) {
+//   try {
+//     const result = await getAllReservationsWithCustomers();
+//     console.log(result);
+
+//     // Always return 200 because request succeeded eventhough data does not exist
+//     if (!result.success) {
+//       return res.status(200).json({
+//         success: true,
+//         code: "NO_RESERVATIONS_FOUND",
+//         arrReservations: [],
+//         message: "No reservations found",
+//       });
+//     }
+//     // If data exists
+//     else {
+//       return res.status(200).json({
+//         success: true,
+//         code: "RESERVATIONS_FOUND",
+//         arrReservations: result.arrReservations,
+//       });
+//     }
+//   } catch (error) {
+//     console.error("Get reservations error:", error);
+
+//     return res.status(500).json({
+//       success: false,
+//       code: "GET_RESERVATIONS_FAILED",
+//       message: "Failed to fetch reservations",
+//     });
+//   }
+// });
+
+//- Get all reservations and customers who made those reservations (New version)
+app.get("/api/get-reservations-and-customers", async function (req, res) {
+  try {
+    // Step 1: Get today's date and parse it
+    const date = new Date();
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const year = date.getFullYear();
+    const today = `${day}/${month}/${year}`;
+
+    // Parse today's date, so it can be compared with other dates
+    const parsedToday = parseDate(today);
+
+    // Step 2: Get all reservations and customers
+    const reservationResult = await getAllReservationsWithCustomers();
+    console.log(reservationResult);
+
+    // Step 3: Loop each reservation to do calculate reservation end time and status
+    for (const { reservation, customer } of reservationResult.reservationData) {
+      console.log(reservation);
+      console.log(customer);
+
+      // Calculate what time the reservation ends
+      reservation.endTime = calculateReservationEndTime(
+        reservation.time,
+        reservation.duration,
+      );
+
+      // Check if the reservation is in the past, present or future
+      reservation.status = getReservationStatus(
+        reservation.date,
+        reservation.time,
+        reservation.endTime,
+        parsedToday,
+      );
+
+      // Step 4: Create a button that tells reservation's status
+      if (reservation.status == "Ongoing") {
+        reservation.button = `<button type="button" class="btn btn-outline-warning">${reservation.status}</button>`;
+      } else if (reservation.status == "Success") {
+        reservation.button = `<button type="button" class="btn btn-outline-success">${reservation.status}</button>`;
+      } else if (reservation.status == "Booked") {
+        reservation.button = `<button data-id=${reservation.id} type="button" class="btn btn-outline-primary btn-delete">${reservation.status}</button>`;
+      } else {
+        reservation.button = `<button type="button" class="btn btn-outline-danger">${reservation.status}</button>`;
+      }
+    }
+
+    // Step 4: Send data back
+    return res.status(200).json({
+      success: true,
+      code: "RESERVATIONS_CUSTOMERS_FOUND",
+      reservationResult,
+    });
+  } catch (error) {
+    console.error("Get reservations error:", error);
+
+    return res.status(500).json({
+      success: false,
+      code: "GET_RESERVATIONS_FAILED",
+      message: "Failed to fetch reservations",
+    });
+  }
+});
+
+//- Get all tables from "tables" collection (READ) >>>>
 app.get("/api/getAllTables", async function (req, res) {
   try {
     let arrTables = await getTables();
@@ -636,7 +1382,7 @@ app.get("/api/getAllTables", async function (req, res) {
   }
 });
 
-//- Get a customer via its customer ID in "customers" collection (READ)
+//- Get a customer via its customer ID in "customers" collection (READ) >>>>
 // (customer id is that customer's document id)
 app.get("/api/getCustomer/:id", async function (req, res) {
   try {
@@ -676,111 +1422,144 @@ app.get("/api/getCustomer/:id", async function (req, res) {
   }
 });
 
-//- Get all reservations including their respective customer data (READ)
-app.get("/api/get-all-reservations-with-customers", async function (req, res) {
+//- Get CRM details (Another version) >>>>
+app.get("/api/get-crm", async function (req, res) {
   try {
-    const result = await getAllReservationsWithCustomers();
-    console.log(result);
+    // Step 1: Get all customers
+    let customers = await getAllCustomers();
 
-    // Always return 200 because request succeeded eventhough data does not exist
-    if (!result.success) {
-      return res.status(200).json({
-        success: true,
-        code: "NO_RESERVATIONS_FOUND",
-        arrReservations: [],
-        message: "No reservations found",
-      });
+    // Step 2: Get all reservations
+    const reservations = await getAllReservations();
+
+    // Step 3: Create four new properties in each customer object
+    for (const customer of customers) {
+      customer.totalBookings = 0;
+      customer.lastVisitDate = "";
+      customer.upcomingVisitDate = "";
+      customer.dates = [];
     }
-    // If data exists
-    else {
-      return res.status(200).json({
-        success: true,
-        code: "RESERVATIONS_FOUND",
-        arrReservations: result.arrReservations,
-      });
-    }
-  } catch (error) {
-    console.error("Get reservations error:", error);
 
-    return res.status(500).json({
-      success: false,
-      code: "GET_RESERVATIONS_FAILED",
-      message: "Failed to fetch reservations",
-    });
-  }
-});
-
-// Get booking counts for each customer (For CRM only)
-app.get("/api/get-customer-booking-count", async function (req, res) {
-  try {
-    // Get all reservations data (including their respective customer data)
-    const result = await getAllReservationsWithCustomers();
-
-    // If data exist
-    if (result.success) {
-      const arrReservationsWithCustomer = result.arrReservations;
-      console.log(arrReservationsWithCustomer);
-
-      for (const { reservation, customer } of arrReservationsWithCustomer) {
-        // STEP 1: COUNT HOW MANY TIMES A CUSTOMER HAS MADE RESERVATIONS
-
-        if (Object.hasOwn(crm, customer.name)) {
-          // crm[customer.name]++;
-          crm[customer.name].totalReservations =
-            crm[customer.name].totalReservations + 1;
+    // Step 4: Count total bookings made by each customer
+    for (const customer of customers) {
+      for (const reservation of reservations) {
+        if (customer.id == reservation.customerId) {
+          customer.totalBookings++;
         }
-        //
-        else {
-          // Create a new property
-          // customer name as key. value is the number of reservations they made.
-          // crm[customer.name] = 1;
-          crm[customer.name] = {
-            lastVisitDate: "",
-            upcomingVisitDate: "",
-            phoneNumber: customer.phoneNumber,
-          };
-          crm[customer.name].totalReservations = 1;
-        }
-
-        // STEP 2: FIND EACH CUSTOMER'S LAST VISIT DATE AND UPCOMING DATE
-        // Create two more properties (upcomingVisitDate and lastVisitDate)
-        // In this else block,
-        // it is the first reservation record found for this customer.
-        // Since it is at the top of the database, it is the latest reservation.
-        // Check whether the reservation date is today/future
-        // so it can be stored in the correct property.
-
-        // Parse the dates so it can be compared
-        setDates(reservation, customer);
       }
-      console.log(crm);
+    }
 
-      return res.status(200).json({
-        success: true,
-        crm,
-      });
+    // Step 5: For each customer, store all of their reservation dates
+    for (const customer of customers) {
+      for (const reservation of reservations) {
+        if (customer.id == reservation.customerId) {
+          customer.dates.push({
+            date: reservation.date,
+            time: reservation.time,
+          });
+        }
+      }
     }
-    // If data does not exist
-    else {
-      console.log("Error at get-customer-booking-count (else block)");
-      return res.status(200).json({
-        success: false,
-        code: "NO_DATA_RETURNED",
-        message: "No reservation data returned",
-      });
-    }
+
+    // Step 6: For each customer, find their last visit date
+    customers = getCustomerLastVisitDate(customers);
+
+    // Step 7: For each customer, find their upcoming visit date
+    customers = getCustomerUpcomingVisitDate(customers);
+
+    return res.status(200).json({
+      status: "success",
+      customers,
+    });
   } catch (error) {
-    console.error("Get customer booking count error:", error);
+    console.error("get crm error\n:", error);
 
     return res.status(500).json({
       success: false,
-      code: "GET_CUSTOMER_BOOKING_COUNT_FAILED",
+      code: "GET_CRM_ERROR",
       message: "Internal server error",
     });
   }
 });
 
-// Get dashboard summary
+//- Get Customer Details >>>>
+app.get("/api/get-customer-details", async function (req, res) {
+  try {
+    const customerId = req.query.id;
+
+    // Find customer by ID
+    const customerDoc = await db.collection("customers").doc(customerId).get();
+
+    // If customer does not exist
+    if (!customerDoc.exists) {
+      return res.status(404).json({
+        status: "error",
+        message: "Customer not found",
+      });
+    }
+
+    // If customer exist, store it in an object including their customer document id
+    const customerDetails = {
+      id: customerDoc.id,
+      ...customerDoc.data(),
+    };
+
+    // Get customer's reservations
+    const reservationSnapshot = await db
+      .collection("reservations")
+      .where("customerId", "==", customerId)
+      .get();
+
+    const reservationDetails = [];
+
+    // Store reservation data in array. An array of objects
+    reservationSnapshot.forEach((reservationDoc) => {
+      reservationDetails.push({
+        reservationId: reservationDoc.id,
+        ...reservationDoc.data(),
+      });
+    });
+
+    // Send customer and reservation data
+    return res.status(200).json({
+      status: "success",
+      customerDetails,
+      reservationDetails,
+    });
+  } catch (error) {
+    console.error("getCustomerDetails error:\n", error);
+
+    // Handle server error
+    return res.status(500).json({
+      status: "error",
+      customerDetails: null,
+      reservationDetails: [],
+      error: error.message,
+    });
+  }
+});
+
+//- Delete a reservation >>>>
+app.delete("/api/delete-reservation/:reservationId", async (req, res) => {
+  try {
+    const reservationId = req.params.reservationId;
+
+    await db.collection("reservations").doc(reservationId).delete();
+
+    res.json({
+      success: true,
+      message: "Reservation deleted successfully",
+    });
+  } catch (error) {
+    console.error(error);
+
+    res.json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+//- Get dashboard summary >>>>
 app.get("/api/get-dashboard-summary", async function (req, res) {
   try {
     //- Step 1: Get all reservations and their respective customers
@@ -794,7 +1573,6 @@ app.get("/api/get-dashboard-summary", async function (req, res) {
       // 1. count the total customers
       // 2. count total reservations
       // 3. count how many reservations are happening today
-
       // Variables defined outside of then() scope
       let totalCustomers = 0;
       let totalReservations = 0;
@@ -810,7 +1588,7 @@ app.get("/api/get-dashboard-summary", async function (req, res) {
         Sunday: 0,
       };
 
-      for (const { reservation, customer } of result.arrReservations) {
+      for (const { reservation, customer } of result.reservationData) {
         // Get total customers this reservation has and add it to totalCustomers
         totalCustomers = totalCustomers + Number(reservation.totalGuests);
 
